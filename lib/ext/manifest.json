@@ -1,0 +1,31 @@
+{
+    "manifest_version": 2,
+    "name": "Chrome Automation",
+    "description": "This chrome extension is undetectable automation.",
+    "version": "6.0.0",
+    "browser_action": {
+        "default_icon": "icon.png"
+    },
+    "permissions": [
+        "tabs",
+        "<all_urls>",
+        "browsingData",
+        "cookies"
+    ],
+    "content_scripts": [
+        {
+            "matches": [
+                "<all_urls>"
+            ],
+            "js": [
+                "content.js"
+            ]
+        }
+    ],
+    "background": {
+        "scripts": [
+            "background.js"
+        ],
+        "persistent": true
+    }
+}
