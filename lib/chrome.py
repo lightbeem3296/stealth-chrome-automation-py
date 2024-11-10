@@ -10,13 +10,13 @@ from pathlib import Path
 from typing import Any, Optional
 
 import userpaths
-
 from loguru import logger
+
 from lib.websocket import WebSocketServer
 
-CUR_DIR = str(Path(__file__).parent.absolute())
-TEMP_DIR = os.path.join(CUR_DIR, "temp")
-EXTENSION_DIR = os.path.join(CUR_DIR, "ext")
+CUR_DIR = Path(__file__).parent
+TEMP_DIR = CUR_DIR / "temp"
+EXTENSION_DIR = CUR_DIR / "ext"
 
 
 class ChromeElem:
@@ -108,11 +108,11 @@ class Chrome:
             websocket_server.start()
 
             # copy extension to temp folder
-            ext_dir = os.path.join(TEMP_DIR, f"ext_{datetime.now().timestamp()}")
-            shutil.copytree(EXTENSION_DIR, ext_dir, dirs_exist_ok=True)
+            temp_ext_dir = CUR_DIR / f"ext_{datetime.now().timestamp()}"
+            shutil.copytree(EXTENSION_DIR, temp_ext_dir, dirs_exist_ok=True)
 
             # set extension port number
-            background_js_path = os.path.join(ext_dir, "background.js")
+            background_js_path = os.path.join(temp_ext_dir, "background.js")
             with open(background_js_path, "r") as f:
                 background_js_content = f.read()
             with open(background_js_path, "w") as f:
@@ -125,8 +125,8 @@ class Chrome:
             # start chrome
             cmd = [chrome_path]
             cmd.append(f"--user-data-dir={self.__user_data_dir}")
-            if os.path.isdir(ext_dir):
-                cmd.append(f"--load-extension={ext_dir}")
+            if os.path.isdir(temp_ext_dir):
+                cmd.append(f"--load-extension={temp_ext_dir}")
 
             if self.__left * self.__top != 0:
                 cmd.append(f"--window-position={self.__left},{self.__top}")
@@ -144,7 +144,9 @@ class Chrome:
                 cmd.append(self.__init_url)
 
             self.__process = subprocess.Popen(cmd)
-            time.sleep(5)
+            logger.info("initializing browser ...")
+            time.sleep(10)
+            shutil.rmtree(temp_ext_dir)
 
             # accept
             self.__client_unit = websocket_server.accept()

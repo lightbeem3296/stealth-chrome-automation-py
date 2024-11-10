@@ -3,14 +3,9 @@ import time
 from pathlib import Path
 from random import randint
 
-import urllib3
 from loguru import logger
 
 from lib.chrome import Chrome
-
-urllib3.disable_warnings()
-
-COOKIE = ""
 
 CUR_DIR = str(Path(__file__).parent.absolute())
 TEMP_DIR = os.path.join(CUR_DIR, "temp")
