@@ -1,18 +1,17 @@
+import asyncio
+import websockets
 import base64
 import json
 import os
 import shutil
 import socket
 import subprocess
-import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
 
 import userpaths
 from loguru import logger
-
-from lib.websocket import WebSocketServer
 
 CUR_DIR = Path(__file__).parent
 TEMP_DIR = CUR_DIR / "temp"
@@ -45,6 +44,7 @@ class Chrome:
         self.__user_data_dir = user_data_dir
         self.__user_agent = user_agent
         self.__process = None
+        self.__websocket_server = None
         self.__client_unit = None
 
     def __find_port(self) -> int:
@@ -52,12 +52,12 @@ class Chrome:
             s.bind(("", 0))  # Bind to a free port provided by the host
             return s.getsockname()[1]  # Return the assigned port number
 
-    def __send_command(self, msg: str, payload: Optional[str] = None) -> Any:
+    async def __send_command(self, msg: str, payload: Optional[str] = None) -> Any:
         ret = None
         try:
             if self.__client_unit is not None:
                 if payload is not None:
-                    self.__client_unit.send(
+                    await self.__client_unit.send(
                         json.dumps(
                             {
                                 "msg": msg,
@@ -66,28 +66,31 @@ class Chrome:
                         )
                     )
                 else:
-                    self.__client_unit.send(
+                    await self.__client_unit.send(
                         json.dumps(
                             {
                                 "msg": msg,
                             }
                         )
                     )
-                resp = self.__client_unit.recv()
+                resp = await self.__client_unit.recv()
                 if resp is not None:
                     js_res = json.loads(resp)["result"]
                     if js_res != "<undefined>":
                         ret = js_res
                 else:
                     logger.error("resp is none")
-                    time.sleep(0.5)
+                    await asyncio.sleep(0.5)
             else:
                 logger.error("client_unit is none")
         except Exception as ex:
             logger.exception(ex)
         return ret
 
-    def start(self):
+    async def handle_client(self, websocket, _path):
+        self.__client_unit = websocket
+
+    async def start(self):
         chrome_path = ""
         chrome_est_paths = [
             userpaths.get_local_appdata() + "\\Google\\Chrome\\Application\\Chrome.exe",
@@ -104,8 +107,9 @@ class Chrome:
             port = self.__find_port()
 
             # start socket server
-            websocket_server = WebSocketServer("127.0.0.1", port)
-            websocket_server.start()
+            self.__websocket_server = await websockets.serve(
+                self.handle_client, "localhost", port
+            )
 
             # copy extension to temp folder
             temp_ext_dir = CUR_DIR / f"ext_{datetime.now().timestamp()}"
@@ -145,35 +149,41 @@ class Chrome:
 
             self.__process = subprocess.Popen(cmd)
             logger.info("initializing browser ...")
-            time.sleep(10)
+            await asyncio.sleep(10)
             shutil.rmtree(temp_ext_dir)
 
             # accept
-            self.__client_unit = websocket_server.accept()
+            logger.info("waiting for client ...")
+            while self.__client_unit is None:
+                await asyncio.sleep(1)
             logger.info("client connected")
         else:
             logger.error("chrome.exe not found")
 
-    def quit(self):
+    async def quit(self):
         if self.__process is not None:
             self.__process.terminate()
             self.__process = None
 
         if self.__client_unit is not None:
-            self.__client_unit.close()
+            await self.__client_unit.close()
             self.__client_unit = None
+
+        if self.__websocket_server is not None:
+            self.__websocket_server.close()
+            self.__websocket_server = None
 
         self.__width = 0
         self.__height = 0
         self.__block_image = True
 
-    def run_script(self, script: str) -> Optional[str]:
-        return self.__send_command("runScript", script)
+    async def run_script(self, script: str) -> Optional[str]:
+        return await self.__send_command("runScript", script)
 
-    def url(self) -> Optional[str]:
-        return self.run_script("location.href")
+    async def url(self) -> Optional[str]:
+        return await self.run_script("location.href")
 
-    def goto(
+    async def goto(
         self,
         url2go: str,
         wait_timeout: float = 30.0,
@@ -183,21 +193,21 @@ class Chrome:
         try:
             timeout = False
 
-            old_url = self.url()
+            old_url = await self.url()
             if old_url == url2go:
-                self.run_script("location.reload()")
+                await self.run_script("location.reload()")
             else:
-                self.run_script(f"location.href='{url2go}'")
+                await self.run_script(f"location.href='{url2go}'")
                 # wait for url changed
                 start_tstamp = datetime.now().timestamp()
                 while True:
-                    if old_url != self.url():
+                    if old_url != await self.url():
                         break
                     if datetime.now().timestamp() - start_tstamp > wait_timeout:
                         logger.error("timeout")
                         timeout = True
                         break
-                    time.sleep(0.1)
+                    await asyncio.sleep(0.1)
 
             # wait for element valid
             if not timeout:
@@ -211,7 +221,7 @@ class Chrome:
                             logger.error("timeout")
                             timeout = True
                             break
-                        time.sleep(0.1)
+                        await asyncio.sleep(0.1)
 
             if not timeout:
                 ret = True
@@ -219,23 +229,23 @@ class Chrome:
             logger.exception(ex)
         return ret
 
-    def cookie(self, domain: str) -> Any:
-        return self.__send_command("getCookie", domain)
+    async def cookie(self, domain: str) -> Any:
+        return await self.__send_command("getCookie", domain)
 
-    def clear_cookie(self):
-        return self.__send_command(
+    async def clear_cookie(self):
+        return await self.__send_command(
             "clearCookie",
         )
 
-    def head(self) -> Optional[str]:
-        return self.run_script("document.head.outerHTML")
+    async def head(self) -> Optional[str]:
+        return await self.run_script("document.head.outerHTML")
 
-    def body(self) -> Optional[str]:
-        return self.run_script("document.body.outerHTML")
+    async def body(self) -> Optional[str]:
+        return await self.run_script("document.body.outerHTML")
 
-    def select(self, selector: str) -> list[ChromeElem]:
+    async def select(self, selector: str) -> list[ChromeElem]:
         ret = []
-        jres = self.run_script(
+        jres = await self.run_script(
             """
 function getSelector(elm) {
     if (elm.tagName === 'BODY') return 'BODY';
@@ -280,31 +290,33 @@ selectors;"""
         else:
             return None
 
-    def set_value(self, selector: str, value: str):
+    async def set_value(self, selector: str, value: str):
         b64value = base64.b64encode(value.encode()).decode()
-        self.run_script(
+        await self.run_script(
             f"document.querySelector('{selector}').value=atob('{b64value}')"
         )
 
-    def click(self, selector: str):
-        self.run_script(f"document.querySelector('{selector}').click()")
+    async def click(self, selector: str):
+        await self.run_script(f"document.querySelector('{selector}').click()")
 
-
-if __name__ == "__main__":
+async def main():
     chrome = Chrome(user_data_dir=os.path.join(TEMP_DIR, "profile"))
-    chrome.start()
+    await chrome.start()
 
-    chrome.goto(url2go="https://google.com", wait_elem_selector="#APjFqb")
-    logger.info(str(chrome.url()))
+    await chrome.goto(url2go="https://google.com", wait_elem_selector="#APjFqb")
+    logger.info(str(await chrome.url()))
 
-    chrome.set_value(selector="#APjFqb", value="chrome")
-    chrome.click(selector="[name=btnK]")
+    await chrome.set_value(selector="#APjFqb", value="chrome")
+    await chrome.click(selector="[name=btnK]")
 
     logger.info("before clear cookie")
     logger.info(chrome.cookie("google.com"))
-    chrome.clear_cookie()
+    await chrome.clear_cookie()
     logger.info("after clear cookie")
     logger.info(chrome.cookie("google.com"))
 
     input("Press ENTER to exit.")
-    chrome.quit()
+    await chrome.quit()
+
+if __name__ == "__main__":
+    asyncio.run(main())
