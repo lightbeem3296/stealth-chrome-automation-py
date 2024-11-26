@@ -45,7 +45,8 @@ class Chrome:
         self._user_data_dir: Optional[str] = user_data_dir
         self._user_agent: Optional[str] = user_agent
         self._process = None
-        self._client_unit: Optional[ServerConnection] = None
+        self._ws_client: Optional[ServerConnection] = None
+        self._ws_server = None
 
     def _find_port(self) -> int:
         with socket.socket() as s:
@@ -55,9 +56,9 @@ class Chrome:
     def _send_command(self, msg: str, payload: Optional[str] = None) -> Any:
         ret = None
         try:
-            if self._client_unit is not None:
+            if self._ws_client is not None:
                 if payload is not None:
-                    self._client_unit.send(
+                    self._ws_client.send(
                         json.dumps(
                             {
                                 "msg": msg,
@@ -66,14 +67,14 @@ class Chrome:
                         )
                     )
                 else:
-                    self._client_unit.send(
+                    self._ws_client.send(
                         json.dumps(
                             {
                                 "msg": msg,
                             }
                         )
                     )
-                resp = self._client_unit.recv()
+                resp = self._ws_client.recv()
                 if resp is not None:
                     js_res = json.loads(resp)["result"]
                     if js_res != "<undefined>":
@@ -89,12 +90,12 @@ class Chrome:
 
     def _start_websocket_server(self, port: int):
         def echo(websocket):
-            logger.info("client connected")
-            self._client_unit = websocket
-            while True:
+            self._ws_client = websocket
+            while self._process is not None:
                 time.sleep(1)
 
         with serve(echo, "127.0.0.1", port, max_size=2**27) as server:
+            self._ws_server = server
             server.serve_forever()
 
     def start(self):
@@ -156,7 +157,7 @@ class Chrome:
 
             # accept
             while True:
-                if self._client_unit is not None:
+                if self._ws_client is not None:
                     break
                 time.sleep(0.1)
             logger.info("client connected")
@@ -168,9 +169,13 @@ class Chrome:
             self._process.terminate()
             self._process = None
 
-        if self._client_unit is not None:
-            self._client_unit.close()
-            self._client_unit = None
+        if self._ws_server is not None:
+            self._ws_server.shutdown()
+            self._ws_server = None
+
+        if self._ws_client is not None:
+            self._ws_client.close()
+            self._ws_client = None
 
         self._width = 0
         self._height = 0
